@@ -15,7 +15,7 @@ class manipulation_model(nn.Module):
             nn.BatchNorm2d(512),
             nn.ReLU(),
         )    
-        self.predict_miu = nn.Sequential(
+        self.predict_mu = nn.Sequential(
             # nn.Linear(512, 1),
              nn.Conv2d(512, 1, kernel_size=3, stride=1, padding=1),
         )
@@ -27,11 +27,11 @@ class manipulation_model(nn.Module):
     def forward(self, x):
         features = self.resnet18_features(x)
         features = self.predict_model(features)
-        miu = self.predict_miu(features)
+        mu = self.predict_mu(features)
         theta = torch.exp(0.5*self.predict_logtheta2(features))    
         
 
-        return miu,theta,features
+        return mu,theta,features
 
 #model detail
 class UGL_model(nn.Module):
@@ -52,14 +52,14 @@ class UGL_model(nn.Module):
             # nn.Dropout(0.1),
         )
     def forward(self, x,gt=torch.rand(2,1,256,256)):
-        miu,theta,features = self.model(x)
+        mu,theta,features = self.model(x)
         #get uncertainty map
-        uncertainty_map,uncertainty_map_100=get_uncertainty_map(miu,theta)
+        uncertainty_map,uncertainty_map_100=get_uncertainty_map(mu,theta)
 
-        miu_bilinear = F.interpolate(miu, size=gt.shape[2:], mode='bilinear', align_corners=False)
+        mu_bilinear = F.interpolate(mu, size=gt.shape[2:], mode='bilinear', align_corners=False)
         features=F.interpolate(features, size=gt.shape[2:], mode='bilinear', align_corners=False)
         #calculate uncertainty
-        uncertainty_loss,uncertainty_map_n,uncertainty_gt = uncertainty_supervision(gt,miu,uncertainty_map,theta)
+        uncertainty_loss,uncertainty_map_n,uncertainty_gt = uncertainty_supervision(gt,mu,uncertainty_map,theta)
         
         #refine
         features2=features*(self.alpha*uncertainty_map_n+self.beta*uncertainty_gt)
@@ -69,21 +69,21 @@ class UGL_model(nn.Module):
         refine_image=self.refine_pred(refine_features)
         refine_image=F.interpolate(refine_image, size=gt.shape[2:], mode='bilinear', align_corners=False)
         #bce
-        bce_loss_z=bce_loss(refine_image,gt)+bce_loss(miu_bilinear,gt)
+        bce_loss_z=bce_loss(refine_image,gt)+bce_loss(mu_bilinear,gt)
         sample_loss=sample_surpervision(gt,uncertainty_map_100)
 
 
 
 
-        return torch.sigmoid(miu_bilinear),torch.sigmoid(refine_image),uncertainty_loss+bce_loss_z+sample_loss
+        return torch.sigmoid(mu_bilinear),torch.sigmoid(refine_image),uncertainty_loss+bce_loss_z+sample_loss
     
 
     
 
 
-def get_uncertainty_map(miu: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
-    
-    pred = miu + theta * torch.randn_like(torch.rand(100,*miu.shape))
+def get_uncertainty_map(mu: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    #reparameterization(theta not theta^2)
+    pred = mu + theta * torch.randn_like(torch.rand(100,*mu.shape))
     pred=pred.permute(1, 0, 2, 3,4)
     pred = torch.sigmoid(pred)
     uncertainty_map = pred * torch.log(pred) + (1 - pred) * torch.log(1 - pred)
@@ -108,6 +108,7 @@ def uncertainty_supervision(gt,coarse_map,uncertainty_map,theta):
     return L2_loss_l,uncertainty_gt,uncertainty_map_n
     
 def sample_surpervision(gt,uncertainty_map_100):
+    #different from the formula
     uncertainty_map_100=uncertainty_map_100.squeeze(2)
     uncertainty_map_100=F.interpolate(uncertainty_map_100,size=gt.shape[2:],mode='bilinear',align_corners=False)
     uncertainty_map_100=uncertainty_map_100.unsqueeze(2)
@@ -125,5 +126,5 @@ if __name__ == "__main__":
     model=UGL_model(model=manipulation_model)
     image=torch.rand(2,3,256,256)
     gt=torch.rand(2,1,256,256)
-    miu,refine_image,loss=model(image,gt)
-    print(miu.shape,refine_image.shape,loss)
+    mu,refine_image,loss=model(image,gt)
+    print(mu.shape,refine_image.shape,loss)
